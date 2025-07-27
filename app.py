@@ -123,7 +123,25 @@ def health_check():
     """
     return jsonify({
         'status': 'ok',
-        'message': 'El servidor de mejora de texto está funcionando correctamente'
+        'message': 'El servidor de mejora de texto está funcionando correctamente',
+        'timestamp': str(np.datetime64('now'))
+    }), 200
+
+@app.route('/', methods=['GET'])
+def root():
+    """
+    Endpoint raíz con información básica
+    """
+    return jsonify({
+        'service': 'Text Mining System API',
+        'status': 'running',
+        'endpoints': {
+            'health': '/health',
+            'process_text': '/api/process_text',
+            'bert_improve': '/api/bert/improve',
+            'bert_variations': '/api/bert/generate_variations',
+            'bert_embeddings': '/api/bert/embeddings'
+        }
     }), 200
 
 if __name__ == '__main__':

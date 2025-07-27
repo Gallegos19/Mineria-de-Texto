@@ -39,20 +39,32 @@ class BERTProcessor:
         if self.tokenizer is None or self.model is None:
             print(f"Cargando modelo BERT: {self.model_name}")
             try:
-                self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
-                self.model = BertModel.from_pretrained(self.model_name)
+                # Usar modelo más ligero para Railway
+                light_model = 'distilbert-base-multilingual-cased'
+                print(f"Usando modelo ligero: {light_model}")
+                
+                from transformers import DistilBertTokenizer, DistilBertModel
+                self.tokenizer = DistilBertTokenizer.from_pretrained(light_model)
+                self.model = DistilBertModel.from_pretrained(light_model)
                 self.model.to(self.device)
                 self.model.eval()
-                print("✓ Modelo BERT cargado exitosamente")
+                print("✓ Modelo BERT ligero cargado exitosamente")
             except Exception as e:
-                print(f"Error cargando BERT: {e}")
-                # Fallback a modelo en inglés
-                print("Usando modelo BERT en inglés como fallback...")
-                self.model_name = 'bert-base-uncased'
-                self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
-                self.model = BertModel.from_pretrained(self.model_name)
-                self.model.to(self.device)
-                self.model.eval()
+                print(f"Error cargando BERT ligero: {e}")
+                # Fallback a modelo aún más simple
+                try:
+                    print("Usando modelo BERT base en inglés como fallback...")
+                    self.model_name = 'bert-base-uncased'
+                    self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
+                    self.model = BertModel.from_pretrained(self.model_name)
+                    self.model.to(self.device)
+                    self.model.eval()
+                    print("✓ Modelo BERT fallback cargado")
+                except Exception as e2:
+                    print(f"❌ Error crítico cargando BERT: {e2}")
+                    # Crear un mock para que la app no falle
+                    self.tokenizer = None
+                    self.model = None
     
     def generate_embeddings(self, text: str) -> Dict:
         """
