@@ -30,12 +30,45 @@ def process_text():
         content_type = data.get('content_type', 'contenido')
         track_steps = data.get('track_steps', False)
         
-        # Procesar el texto
+        # Respuesta rápida para textos muy largos
+        if len(text) > 500:
+            return jsonify({
+                'error': 'Texto demasiado largo. Máximo 500 caracteres para evitar timeouts.',
+                'suggestion': 'Usa el endpoint /api/process_text_simple para textos largos'
+            }), 400
+        
+        # Procesar el texto con timeout implícito
         result = text_mining_system.process_text_complete_enhanced(
             text=text,
             content_type=content_type,
             track_steps=track_steps
         )
+        
+        return jsonify(result), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/process_text_simple', methods=['POST'])
+def process_text_simple():
+    """
+    Endpoint simplificado sin BERT para textos largos o respuesta rápida
+    """
+    try:
+        data = request.get_json()
+        
+        if 'text' not in data:
+            return jsonify({'error': 'El campo "text" es requerido'}), 400
+        
+        text = data['text']
+        
+        # Procesamiento básico sin BERT
+        result = {
+            'original_text': text,
+            'final_text': text.strip().lower(),
+            'processing_type': 'simple',
+            'message': 'Procesamiento básico completado sin BERT para evitar timeouts'
+        }
         
         return jsonify(result), 200
     
@@ -137,12 +170,46 @@ def root():
         'status': 'running',
         'endpoints': {
             'health': '/health',
-            'process_text': '/api/process_text',
+            'warmup': '/warmup',
+            'process_text': '/api/process_text (máx 500 chars)',
+            'process_text_simple': '/api/process_text_simple (sin BERT)',
             'bert_improve': '/api/bert/improve',
             'bert_variations': '/api/bert/generate_variations',
             'bert_embeddings': '/api/bert/embeddings'
         }
     }), 200
+
+@app.route('/warmup', methods=['GET'])
+def warmup():
+    """
+    Endpoint para precargar modelos y evitar timeouts en la primera petición
+    """
+    try:
+        print("🔥 Iniciando warm-up de modelos...")
+        
+        # Precargar BERT
+        text_mining_system.bert_processor._load_bert_model()
+        
+        # Procesar un texto de prueba pequeño
+        test_result = text_mining_system.process_text_complete_enhanced(
+            text="test",
+            content_type="titulo",
+            track_steps=False
+        )
+        
+        return jsonify({
+            'status': 'warmed_up',
+            'message': 'Modelos precargados exitosamente',
+            'bert_loaded': text_mining_system.bert_processor.model is not None,
+            'test_processed': test_result is not None
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'partial_warmup',
+            'message': f'Warm-up parcial: {str(e)}',
+            'note': 'La aplicación funcionará pero puede ser más lenta en la primera petición'
+        }), 200
 
 if __name__ == '__main__':
     import os
