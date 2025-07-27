@@ -1,10 +1,26 @@
 from flask import Flask, request, jsonify
 import json
 import numpy as np
+import os
+import threading
 from modules.text_mining_system import TextMiningSystem
 
 app = Flask(__name__)
-text_mining_system = TextMiningSystem()
+
+# Inicialización lazy del sistema
+text_mining_system = None
+system_lock = threading.Lock()
+
+def get_text_mining_system():
+    """Obtiene el sistema de minería de texto con inicialización lazy"""
+    global text_mining_system
+    if text_mining_system is None:
+        with system_lock:
+            if text_mining_system is None:
+                print("🚀 Inicializando sistema de minería de texto...")
+                text_mining_system = TextMiningSystem()
+                print("✅ Sistema inicializado")
+    return text_mining_system
 
 # Clase auxiliar para serializar arrays numpy
 class NumpyEncoder(json.JSONEncoder):
@@ -37,8 +53,11 @@ def process_text():
                 'suggestion': 'Usa el endpoint /api/process_text_simple para textos largos'
             }), 400
         
+        # Obtener sistema con inicialización lazy
+        system = get_text_mining_system()
+        
         # Procesar el texto con timeout implícito
-        result = text_mining_system.process_text_complete_enhanced(
+        result = system.process_text_complete_enhanced(
             text=text,
             content_type=content_type,
             track_steps=track_steps
@@ -61,16 +80,174 @@ def process_text_simple():
             return jsonify({'error': 'El campo "text" es requerido'}), 400
         
         text = data['text']
+        content_type = data.get('content_type', 'contenido')
         
-        # Procesamiento básico sin BERT
-        result = {
-            'original_text': text,
-            'final_text': text.strip().lower(),
-            'processing_type': 'simple',
-            'message': 'Procesamiento básico completado sin BERT para evitar timeouts'
-        }
+        # Procesamiento básico paso a paso SIN BERT
+        try:
+            # Obtener sistema con inicialización lazy
+            system = get_text_mining_system()
+            
+            # Paso 1: Ingesta
+            ingestion_result = system.ingestion.ingest_manual_text(text)
+            current_text = ingestion_result['original_text']
+            
+            # Paso 2: Limpieza básica
+            cleaning_options = {
+                'remove_urls': True,
+                'remove_emails': True,
+                'remove_phones': True,
+                'remove_html': True,
+                'remove_special_chars': False,
+                'keep_punctuation': True,
+                'normalize_whitespace': True,
+                'normalize_punctuation': True,
+                'remove_newlines': True,
+                'fix_encoding': True
+            }
+            cleaning_result = system.cleaner.basic_clean(current_text, cleaning_options)
+            current_text = cleaning_result['cleaned_text']
+            
+            # Paso 3: Tokenización simple
+            tokens = current_text.split()  # Tokenización básica sin spaCy
+            
+            # Paso 4: Normalización básica
+            normalized_tokens = [token.lower().strip() for token in tokens if token.strip()]
+            current_text = ' '.join(normalized_tokens)
+            
+            # Resultado final
+            result = {
+                'original_text': text,
+                'final_text': current_text,
+                'content_type': content_type,
+                'processing_type': 'simple_complete',
+                'steps_completed': ['ingesta', 'limpieza', 'tokenización', 'normalización'],
+                'message': 'Procesamiento completo sin BERT - Rápido y funcional',
+                'word_count': len(normalized_tokens),
+                'character_count': len(current_text)
+            }
+            
+            return jsonify(result), 200
+            
+        except Exception as processing_error:
+            # Fallback a procesamiento ultra-básico
+            result = {
+                'original_text': text,
+                'final_text': text.strip().lower(),
+                'processing_type': 'basic_fallback',
+                'message': f'Procesamiento básico de fallback: {str(processing_error)}'
+            }
+            return jsonify(result), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/process_text_no_bert', methods=['POST'])
+def process_text_no_bert():
+    """
+    Endpoint que ejecuta todos los pasos EXCEPTO BERT
+    """
+    try:
+        data = request.get_json()
         
-        return jsonify(result), 200
+        if 'text' not in data:
+            return jsonify({'error': 'El campo "text" es requerido'}), 400
+        
+        text = data['text']
+        content_type = data.get('content_type', 'contenido')
+        track_steps = data.get('track_steps', False)
+        
+        # Límite de seguridad
+        if len(text) > 1000:
+            return jsonify({
+                'error': 'Texto demasiado largo. Máximo 1000 caracteres.',
+                'suggestion': 'Usa /api/process_text_simple para procesamiento básico'
+            }), 400
+        
+        intermediate_results = {}
+        processing_steps = []
+        
+        try:
+            # Obtener sistema con inicialización lazy
+            system = get_text_mining_system()
+            
+            # Paso 1: Ingesta
+            ingestion_result = system.ingestion.ingest_manual_text(text)
+            current_text = ingestion_result['original_text']
+            
+            if track_steps:
+                intermediate_results['ingestion'] = current_text
+                processing_steps.append({'step': 'ingesta', 'status': 'completed'})
+            
+            # Paso 2: Limpieza
+            cleaning_options = {
+                'remove_urls': True,
+                'remove_emails': True,
+                'remove_phones': True,
+                'remove_html': True,
+                'remove_special_chars': False,
+                'keep_punctuation': True,
+                'normalize_whitespace': True,
+                'normalize_punctuation': True,
+                'remove_newlines': True,
+                'fix_encoding': True
+            }
+            cleaning_result = system.cleaner.basic_clean(current_text, cleaning_options)
+            current_text = cleaning_result['cleaned_text']
+            
+            if track_steps:
+                intermediate_results['cleaning'] = current_text
+                processing_steps.append({'step': 'limpieza', 'status': 'completed'})
+            
+            # Paso 3: Tokenización (sin spaCy para evitar problemas)
+            tokens = current_text.split()
+            
+            if track_steps:
+                intermediate_results['tokenization'] = ' '.join(tokens[:10]) + ('...' if len(tokens) > 10 else '')
+                processing_steps.append({'step': 'tokenización', 'status': 'completed', 'token_count': len(tokens)})
+            
+            # Paso 4: Normalización básica
+            normalized_tokens = []
+            for token in tokens:
+                # Normalización simple sin librerías pesadas
+                normalized_token = token.lower().strip()
+                if len(normalized_token) > 2:  # Filtrar palabras muy cortas
+                    normalized_tokens.append(normalized_token)
+            
+            current_text = ' '.join(normalized_tokens)
+            
+            if track_steps:
+                intermediate_results['normalization'] = current_text
+                processing_steps.append({'step': 'normalización', 'status': 'completed'})
+            
+            # Resultado final sin BERT
+            result = {
+                'original_text': text,
+                'final_text': current_text,
+                'content_type': content_type,
+                'processing_type': 'complete_no_bert',
+                'intermediate_results': intermediate_results if track_steps else {},
+                'processing_steps': processing_steps if track_steps else [],
+                'steps_completed': ['ingesta', 'limpieza', 'tokenización', 'normalización'],
+                'steps_skipped': ['eliminación_ruido', 'lematización', 'bert_processing'],
+                'message': 'Procesamiento completo sin BERT - Optimizado para Railway',
+                'metrics': {
+                    'original_word_count': len(text.split()),
+                    'final_word_count': len(normalized_tokens),
+                    'character_reduction': len(text) - len(current_text)
+                }
+            }
+            
+            return jsonify(result), 200
+            
+        except Exception as processing_error:
+            return jsonify({
+                'error': f'Error en procesamiento: {str(processing_error)}',
+                'fallback_result': {
+                    'original_text': text,
+                    'final_text': text.strip().lower(),
+                    'processing_type': 'error_fallback'
+                }
+            }), 500
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -90,8 +267,11 @@ def bert_improve():
         improvement_type = data.get('improvement_type', 'contenido')
         environmental_focus = data.get('environmental_focus', True)
         
+        # Obtener sistema con inicialización lazy
+        system = get_text_mining_system()
+        
         # Mejorar texto con BERT
-        result = text_mining_system.bert_processor.improve_text_with_context(
+        result = system.bert_processor.improve_text_with_context(
             text=text,
             improvement_type=improvement_type,
             environmental_focus=environmental_focus
@@ -116,8 +296,11 @@ def bert_generate_variations():
         text = data['text']
         num_variations = data.get('num_variations', 3)
         
+        # Obtener sistema con inicialización lazy
+        system = get_text_mining_system()
+        
         # Generar variaciones
-        result = text_mining_system.bert_processor.generate_variations(
+        result = system.bert_processor.generate_variations(
             text=text,
             num_variations=num_variations
         )
@@ -140,8 +323,11 @@ def bert_embeddings():
         
         text = data['text']
         
+        # Obtener sistema con inicialización lazy
+        system = get_text_mining_system()
+        
         # Generar embeddings
-        result = text_mining_system.bert_processor.generate_embeddings(text)
+        result = system.bert_processor.generate_embeddings(text)
         
         # Usar el encoder personalizado para manejar arrays numpy
         return json.dumps(result, cls=NumpyEncoder), 200
@@ -182,34 +368,34 @@ def root():
 @app.route('/warmup', methods=['GET'])
 def warmup():
     """
-    Endpoint para precargar modelos y evitar timeouts en la primera petición
+    Endpoint ligero para verificar componentes básicos
     """
     try:
-        print("🔥 Iniciando warm-up de modelos...")
+        print("🔥 Verificando componentes básicos...")
         
-        # Precargar BERT
-        text_mining_system.bert_processor._load_bert_model()
+        # Obtener sistema con inicialización lazy
+        system = get_text_mining_system()
         
-        # Procesar un texto de prueba pequeño
-        test_result = text_mining_system.process_text_complete_enhanced(
-            text="test",
-            content_type="titulo",
-            track_steps=False
-        )
+        # Solo verificar que los módulos se pueden importar
+        status = {
+            'ingestion': hasattr(system, 'ingestion'),
+            'cleaner': hasattr(system, 'cleaner'),
+            'tokenizer': hasattr(system, 'tokenizer'),
+            'bert_available': hasattr(system, 'bert_processor')
+        }
         
         return jsonify({
-            'status': 'warmed_up',
-            'message': 'Modelos precargados exitosamente',
-            'bert_loaded': text_mining_system.bert_processor.model is not None,
-            'test_processed': test_result is not None
+            'status': 'ready',
+            'message': 'Componentes básicos verificados',
+            'components': status,
+            'note': 'BERT se cargará bajo demanda para evitar timeouts'
         }), 200
         
     except Exception as e:
         return jsonify({
-            'status': 'partial_warmup',
-            'message': f'Warm-up parcial: {str(e)}',
-            'note': 'La aplicación funcionará pero puede ser más lenta en la primera petición'
-        }), 200
+            'status': 'error',
+            'message': f'Error en verificación: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     import os
