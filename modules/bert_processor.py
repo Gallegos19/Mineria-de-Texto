@@ -93,7 +93,13 @@ class BERTProcessor:
             
             # Obtener diferentes tipos de embeddings
             last_hidden_states = outputs.last_hidden_state
-            pooler_output = outputs.pooler_output
+            
+            # DistilBERT no tiene pooler_output, usar el token [CLS] o promedio
+            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                pooler_output = outputs.pooler_output
+            else:
+                # Para DistilBERT, usar el primer token ([CLS]) como pooler_output
+                pooler_output = last_hidden_states[:, 0, :]
             
             # Embedding promedio de todos los tokens
             mean_embedding = torch.mean(last_hidden_states, dim=1)
